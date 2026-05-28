@@ -1467,3 +1467,143 @@ pytorch-cuda 12.1 requires cuda-cudart >=12.1,<12.2
 - 不安装 PyTorch，避免 `pytorch-cuda 12.1` 锁死 CUDA runtime。
 
 这样项目结构会更像真实工程：训练环境和推理引擎构建环境分离。
+
+## Step 11：独立构建环境打通 llama.cpp CUDA 版本
+
+### 这一步在做什么
+
+我们新建了一个专门用于编译 llama.cpp 的环境：
+
+```text
+d:\pytorch_learning\.conda-envs\llama-build
+```
+
+这个环境和 PyTorch 训练环境分开，目的不是“多建一个环境”，而是解决真实工程里的依赖隔离问题：
+
+- PyTorch 环境要服务训练和实验，里面有 `pytorch-cuda 12.1`；
+- llama.cpp 构建环境要服务 C++/CUDA 编译，需要 `nvcc`、CMake、Ninja、CUDA headers、cuBLAS；
+- 两类环境强行混在一起，会出现 CUDA runtime、CCCL、cuBLAS 版本互相拉扯的问题。
+
+这就是为什么成熟工程会把训练环境、推理服务环境、编译环境分开管理。
+
+### 安装的核心工具链
+
+`llama-build` 环境里确认存在：
+
+```text
+nvcc: CUDA 12.3.107
+cmake: 4.3.3
+ninja: 1.13.2
+cuda-cccl: 12.3.101
+cuda-cudart / cuda-cudart-dev: 12.3.101
+```
+
+此外，为了让 CMake 找到 `CUDA::cublas`，补充安装：
+
+```text
+libcublas: 12.1.0.26
+libcublas-dev: 12.1.0.26
+```
+
+这里选择 12.1 的 cuBLAS 是因为当前显卡驱动不能升级，且本机已有 PyTorch CUDA 12.1 相关库。它能满足 llama.cpp 构建阶段对 cuBLAS 头文件和导入库的需求。
+
+### 构建过程里的关键突破
+
+这次 CMake 成功识别到：
+
+```text
+C compiler: MSVC 19.39.33523.0
+CXX compiler: MSVC 19.39.33523.0
+CUDA compiler: NVIDIA 12.3.107 with host compiler MSVC 19.39.33523.0
+CUDA architecture: sm_86
+OpenSSL: found
+CUDA backend: included
+```
+
+这说明我们已经把下面这些组件真正串起来了：
+
+```text
+llama.cpp 源码
+  -> CMake
+  -> Ninja
+  -> MSVC 14.39
+  -> CUDA nvcc 12.3
+  -> cuBLAS
+  -> RTX 3050 Laptop GPU
+```
+
+### 构建结果
+
+CUDA 版本的 llama.cpp 工具已经生成在：
+
+```text
+third_party\llama.cpp\build-cuda\bin
+```
+
+关键工具包括：
+
+```text
+llama-cli.exe
+llama-bench.exe
+llama-quantize.exe
+llama-server.exe
+```
+
+验证命令：
+
+```powershell
+cmd /c "set PATH=d:\pytorch_learning\third_party\llama.cpp\build-cuda\bin;d:\pytorch_learning\.conda-envs\llama-build\bin;d:\pytorch_learning\.conda-envs\llama-build\Library\bin;%PATH% && third_party\llama.cpp\build-cuda\bin\llama-cli.exe --version"
+```
+
+输出确认：
+
+```text
+version: 1 (939a7dd)
+built with MSVC 19.39.33523.0 for Windows AMD64
+```
+
+再验证 `llama-bench`：
+
+```powershell
+cmd /c "set PATH=d:\pytorch_learning\third_party\llama.cpp\build-cuda\bin;d:\pytorch_learning\.conda-envs\llama-build\bin;d:\pytorch_learning\.conda-envs\llama-build\Library\bin;%PATH% && third_party\llama.cpp\build-cuda\bin\llama-bench.exe --help"
+```
+
+输出里确认识别到 CUDA 设备：
+
+```text
+ggml_cuda_init: found 1 CUDA devices
+Device 0: NVIDIA GeForce RTX 3050 Ti Laptop GPU, compute capability 8.6, VRAM: 4095 MiB
+```
+
+再验证 `llama-quantize`：
+
+```powershell
+cmd /c "set PATH=d:\pytorch_learning\third_party\llama.cpp\build-cuda\bin;d:\pytorch_learning\.conda-envs\llama-build\bin;d:\pytorch_learning\.conda-envs\llama-build\Library\bin;%PATH% && third_party\llama.cpp\build-cuda\bin\llama-quantize.exe --help"
+```
+
+它能列出 `Q4_K_M`、`Q5_K_M`、`Q8_0` 等量化类型，说明量化工具可用。
+
+### 这一步有什么用
+
+这一步是项目从“学习文档”变成“真实落地复现”的关键节点。
+
+我们现在不只是说自己懂量化，而是已经有了真实工具链：
+
+- 可以把 HuggingFace 模型转换成 GGUF；
+- 可以用 `llama-quantize` 做 Q4/Q5/Q8 量化；
+- 可以用 `llama-cli` 做本地推理；
+- 可以用 `llama-bench` 测 tokens/s、显存占用、GPU offload；
+- 可以用 `llama-server` 做本地模型服务部署。
+
+这才是能写进简历的东西。
+
+### 下一步
+
+下一步进入真正的“量化复现”：
+
+1. 选择一个适合 4GB 显存的小模型，例如 Qwen2.5-0.5B 或 Qwen2.5-1.5B；
+2. 下载 HuggingFace 模型到 `models/`；
+3. 使用 llama.cpp 的转换脚本生成 FP16/BF16 GGUF；
+4. 用 `llama-quantize` 生成 `Q8_0`、`Q4_K_M`；
+5. 用 `llama-bench` 对比 CPU 和 CUDA offload 的 tokens/s；
+6. 写出第一份真正的量化实验报告。
