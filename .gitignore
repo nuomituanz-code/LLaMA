@@ -1,4 +1,5 @@
 .conda-envs/
+.conda-pkgs/
 .pytest_cache/
 .pytest-tmp/
 __pycache__/

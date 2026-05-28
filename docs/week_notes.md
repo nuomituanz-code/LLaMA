@@ -1269,3 +1269,91 @@ detected dubious ownership
    - `llama-quantize`
    - `llama-server`
    - `llama-bench`
+
+## Step 9：尝试 CUDA 构建 llama.cpp，并定位工具链不兼容问题
+
+### 这一步在做什么
+
+我们不是在写一个玩具脚本，而是在复现真实 LLM 推理项目 `llama.cpp` 的 CUDA 后端构建。
+
+CUDA 构建的意义是：让模型推理时可以把一部分计算放到 NVIDIA GPU 上执行。对 LLM Infra 岗位来说，这一步非常重要，因为岗位不会只问“会不会 Python”，还会问你是否理解：
+
+- CUDA Toolkit、显卡驱动、MSVC 编译器之间的版本匹配；
+- CMake / Ninja 如何组织 C++ 和 CUDA 项目的构建；
+- 为什么同一个项目在不同机器上会因为工具链版本失败；
+- 如何阅读编译错误并判断是源码问题还是环境问题。
+
+这些能力就是“大模型部署”和“GPU 推理工程”的基础。
+
+### 当前机器环境
+
+我们检查到当前机器的关键环境是：
+
+```text
+GPU：NVIDIA GeForce RTX 3050 Laptop GPU，4GB 显存
+显卡驱动：546.92
+nvidia-smi 显示 CUDA Version：12.3
+nvcc：CUDA 12.3.107
+CMake：Visual Studio 自带 CMake
+Ninja：已安装到项目 conda 环境
+MSVC：14.42 和 14.50
+```
+
+### 尝试 1：直接用 CUDA 12.3 + 新 MSVC 构建
+
+结果失败。
+
+核心错误是：
+
+```text
+unsupported Microsoft Visual Studio version
+```
+
+这说明 CUDA 12.3 的 `nvcc` 不认识当前 Visual Studio 2026 的环境。这里的重点不是“命令写错了”，而是 CUDA 编译器会检查宿主 C++ 编译器版本，如果版本不在它支持范围内，就会拒绝编译。
+
+### 尝试 2：切换到旧一点的 MSVC 14.42
+
+我们显式使用了机器上已有的 MSVC 14.42：
+
+```text
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.42.34433
+```
+
+结果仍然失败，但错误更精确：
+
+```text
+error STL1002: Unexpected compiler version, expected CUDA 12.4 or newer.
+```
+
+这个错误来自 MSVC 的 C++ 标准库头文件 `yvals_core.h`。意思是：当前这套 C++ 标准库认为 CUDA 12.3 太老，至少需要 CUDA 12.4。
+
+### 当前结论
+
+这次 CUDA 构建失败的根因是工具链版本不兼容：
+
+```text
+当前显卡驱动显示最高 CUDA 12.3
+当前 MSVC / C++ 标准库要求 CUDA 12.4 或更新
+所以 CUDA 12.3 + 当前 Visual Studio 环境无法完成 llama.cpp CUDA 编译
+```
+
+这不是 llama.cpp 源码问题，也不是我们项目设计问题，而是 AI Infra 工程里很常见的“底层工具链对齐”问题。
+
+### 这一步对找工作的价值
+
+这一步以后可以在简历或面试里这样表达：
+
+```text
+复现 llama.cpp CUDA 后端构建流程，排查 Windows 环境下 CUDA Toolkit、NVIDIA Driver、MSVC、CMake/Ninja 的版本兼容问题；通过编译日志定位到 CUDA 12.3 与当前 MSVC STL 不兼容，明确需要升级 CUDA/驱动或切换 VS2022 兼容工具链。
+```
+
+这比“跑了一个 MNIST”有价值得多，因为它对应的是实际部署大模型时一定会遇到的工程问题。
+
+### 下一步选择
+
+为了继续走 CUDA 构建，有两个实际方案：
+
+1. 升级 NVIDIA 显卡驱动，让机器支持 CUDA 12.4 或更高版本，然后在项目 conda 环境里安装 CUDA 12.4+ 的 `nvcc`。
+2. 保持 CUDA 12.3，但安装更旧、更兼容的 VS2022 MSVC 工具集，例如 MSVC 14.36 / 14.39。
+
+我建议优先走方案 1，因为后续做 LLM 推理、量化、GPU benchmark 时，较新的 CUDA 环境更常见，也更接近招聘岗位里的真实工程环境。
