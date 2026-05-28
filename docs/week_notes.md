@@ -1357,3 +1357,113 @@ error STL1002: Unexpected compiler version, expected CUDA 12.4 or newer.
 2. 保持 CUDA 12.3，但安装更旧、更兼容的 VS2022 MSVC 工具集，例如 MSVC 14.36 / 14.39。
 
 我建议优先走方案 1，因为后续做 LLM 推理、量化、GPU benchmark 时，较新的 CUDA 环境更常见，也更接近招聘岗位里的真实工程环境。
+
+## Step 10：安装兼容 CUDA 12.3 的 MSVC 14.39，并继续推进 CUDA 构建
+
+### 这一步在做什么
+
+上一轮 CUDA 构建失败的原因不是 llama.cpp 写错了，而是工具链版本不匹配：
+
+```text
+CUDA 12.3 + VS2026 / 新 MSVC 标准库不兼容
+```
+
+因为 NVIDIA 驱动暂时不能升级，所以我们不能简单升级到 CUDA 12.4。正确方案是保留 CUDA 12.3，然后安装一个更旧、更适合 CUDA 12.3 的 MSVC 工具集。
+
+### 做了什么
+
+我们安装了 Visual Studio 2022 Build Tools，并确认存在：
+
+```text
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools
+```
+
+关键 MSVC 版本：
+
+```text
+MSVC 14.39.33519
+cl.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.39.33519\bin\Hostx64\x64\cl.exe
+```
+
+这一步的意义是：让 CUDA 12.3 的 `nvcc` 能找到一个更老、更兼容的 C++ 宿主编译器。
+
+### 构建推进结果
+
+重新配置 llama.cpp CUDA 构建时，CMake 已经可以识别：
+
+```text
+C compiler: MSVC 19.39.33523.0
+CXX compiler: MSVC 19.39.33523.0
+CUDA compiler: NVIDIA 12.3.107 with host compiler MSVC 19.39.33523.0
+CUDA architecture: sm_86
+```
+
+这说明之前最大的障碍已经解决了：CUDA 编译器现在能和 MSVC 14.39 正常配合。
+
+### 新发现的问题
+
+构建进入 CUDA 源文件编译阶段后，出现新的问题：
+
+```text
+cuda_fp16.hpp: fatal error C1083: 无法打开包括文件: “nv/target”
+```
+
+排查发现 `nv/target` 实际在：
+
+```text
+d:\pytorch_learning\.conda-envs\pytorch\Library\include\targets\x64\nv\target
+```
+
+说明当前 conda 环境里的 CUDA 包不是完整统一的一套：
+
+```text
+cuda-nvcc: 12.3.107
+cuda-cudart / cuda-cudart-dev: 12.1
+cuda-cccl: 12.9
+pytorch-cuda: 12.1
+```
+
+这就是典型的 CUDA 头文件 / 运行时 / PyTorch 依赖混装问题。
+
+### 为什么不能直接把所有 CUDA 包改成 12.3
+
+尝试统一安装 CUDA 12.3 的 `cuda-cudart` 和 `cuda-cudart-dev` 时，conda 报告冲突：
+
+```text
+pytorch-cuda 12.1 requires cuda-cudart >=12.1,<12.2
+```
+
+也就是说，当前环境里的 PyTorch 强依赖 CUDA runtime 12.1。如果强行改成 12.3，可能会破坏 PyTorch。
+
+### 这一步对找工作的价值
+
+这一步非常接近真实 AI Infra 工作：
+
+- 不是只会运行模型，而是能处理 C++ / CUDA / Python 环境冲突；
+- 能读懂 CMake、Ninja、nvcc、MSVC 的错误；
+- 能判断是编译器版本问题、SDK 路径问题，还是 CUDA 包混装问题；
+- 能把 PyTorch 训练环境和 llama.cpp 编译环境隔离开。
+
+面试里可以这样说：
+
+```text
+在 Windows 环境复现 llama.cpp CUDA 构建时，定位并解决 CUDA 12.3 与新 MSVC 不兼容问题；安装 VS2022 Build Tools/MSVC 14.39 后，成功让 CMake 识别 CUDA 12.3 + MSVC 19.39 工具链，并继续排查 conda CUDA 头文件混装导致的编译错误。
+```
+
+### 下一步
+
+不要继续污染当前 PyTorch 环境。下一步应该新建一个独立的 llama.cpp 构建环境，例如：
+
+```text
+.conda-envs\llama-build
+```
+
+这个环境只负责：
+
+- CUDA 12.3 编译工具链；
+- CMake / Ninja；
+- llama.cpp 构建；
+- 不安装 PyTorch，避免 `pytorch-cuda 12.1` 锁死 CUDA runtime。
+
+这样项目结构会更像真实工程：训练环境和推理引擎构建环境分离。
