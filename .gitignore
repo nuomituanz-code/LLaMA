@@ -1,0 +1,27 @@
+.conda-envs/
+.pytest_cache/
+.pytest-tmp/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+data/
+outputs/
+models/
+artifacts/
+build/
+dist/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+*.engine
+*.log
+
+.vscode/
+
+# third-party source is cloned locally for reproduction, not committed here
+third_party/
